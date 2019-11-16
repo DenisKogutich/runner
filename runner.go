@@ -14,6 +14,7 @@ type Runner struct {
 	running map[string]Job
 	stopper map[string]func()
 	stopC   chan struct{}
+	tasks   *TasksChannel
 
 	// external changes
 	add    <-chan []Job
@@ -35,13 +36,18 @@ func NewRunner(cfg *Config, add <-chan []Job, delete <-chan []Job) *Runner {
 
 func (r *Runner) Start() {
 	r.stopC = make(chan struct{})
-	r.wg.Add(1)
-	go r.loop()
+	r.tasks = NewTasksChannel()
+
+	r.wg.Add(2)
+	go r.eventLoop()
+	go r.taskLoop()
 }
 
 func (r *Runner) Stop() {
 	close(r.stopC)
 	r.wg.Wait()
+
+	r.tasks.Close()
 	r.stopC = nil
 
 	r.guard.Lock()
@@ -52,7 +58,7 @@ func (r *Runner) Stop() {
 	}
 }
 
-func (r *Runner) loop() {
+func (r *Runner) eventLoop() {
 	defer r.wg.Done()
 
 	for {
@@ -60,31 +66,52 @@ func (r *Runner) loop() {
 		case <-r.stopC:
 			return
 		case add := <-r.add:
-			for _, j := range add {
-				name := j.Name
-
-				r.guard.RLock()
-				_, scheduled := r.stopper[name]
-				r.guard.RUnlock()
-
-				// job already scheduled for running
-				if scheduled {
-					continue
-				}
-
-				ctx, cancel := context.WithCancel(context.Background())
-
-				r.guard.Lock()
-				r.stopper[name] = func() {
-					cancel()
-					delete(r.stopper, name)
-				}
-				r.guard.Unlock()
-
-				r.addJob(ctx, j)
+			for _, job := range add {
+				r.tasks.Put(NewAddTask(job))
 			}
 		case del := <-r.delete:
-			r.deleteJobs(del)
+			for _, job := range del {
+				r.tasks.Put(NewDeleteTask(job))
+			}
+		}
+	}
+}
+
+func (r *Runner) taskLoop() {
+	defer r.wg.Done()
+
+	for {
+		select {
+		case <-r.stopC:
+			return
+		case task := <-r.tasks.Chan():
+			job := task.Job()
+
+			// delete
+			if task.Type() == Delete {
+				r.deleteJob(job)
+				return
+			}
+
+			// add
+			r.guard.RLock()
+			_, skip := r.stopper[job.Name]
+			r.guard.RUnlock()
+
+			// job already running or scheduled for running
+			if skip {
+				continue
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			r.guard.Lock()
+			r.stopper[job.Name] = func() {
+				cancel()
+				delete(r.stopper, job.Name)
+			}
+			r.guard.Unlock()
+
+			r.addJob(ctx, job)
 		}
 	}
 }
@@ -99,6 +126,14 @@ func (r *Runner) addJob(ctx context.Context, job Job) {
 		defer r.limiter.Release()
 
 		if err := job.Start(ctx); err == nil {
+			// additional check for ctx cancel in case of job not handle ctx correctly
+			select {
+			case <-ctx.Done():
+				job.Stop()
+				return
+			default:
+			}
+
 			r.guard.Lock()
 			defer r.guard.Unlock()
 
@@ -107,13 +142,6 @@ func (r *Runner) addJob(ctx context.Context, job Job) {
 				job.Stop()
 				delete(r.running, job.Name)
 				delete(r.stopper, job.Name)
-			}
-
-			// additional check for ctx cancel in case of job not handle ctx correctly
-			select {
-			case <-ctx.Done():
-				r.stopper[job.Name]()
-			default:
 			}
 
 			return
@@ -132,13 +160,11 @@ func (r *Runner) addJob(ctx context.Context, job Job) {
 	}()
 }
 
-func (r *Runner) deleteJobs(jobs []Job) {
+func (r *Runner) deleteJob(job Job) {
 	r.guard.Lock()
 	defer r.guard.Unlock()
 
-	for _, j := range jobs {
-		if stopper, exist := r.stopper[j.Name]; exist {
-			stopper()
-		}
+	if stopper, exist := r.stopper[job.Name]; exist {
+		stopper()
 	}
 }
