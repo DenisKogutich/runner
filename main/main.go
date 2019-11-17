@@ -18,6 +18,10 @@ func main() {
 
 	time.AfterFunc(3*time.Second, func() {
 		del <- []runner.Job{{Name: "2"}, {Name: "fail"}}
+
+		time.AfterFunc(5*time.Second, func() {
+			add <- []runner.Job{{Name: "6"}}
+		})
 	})
 
 	time.Sleep(time.Minute)

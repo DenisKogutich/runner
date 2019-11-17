@@ -133,6 +133,9 @@ func (r *Runner) addJob(ctx context.Context, job Job) {
 		defer r.limiter.Release()
 
 		if err := job.Start(ctx); err == nil {
+			r.guard.Lock()
+			defer r.guard.Unlock()
+
 			// additional check for ctx cancel in case of job not handle ctx correctly
 			select {
 			case <-ctx.Done():
@@ -142,10 +145,9 @@ func (r *Runner) addJob(ctx context.Context, job Job) {
 			default:
 			}
 
-			r.guard.Lock()
-			defer r.guard.Unlock()
-
 			log.Printf("[INF] %d/%d, %q started \n", len(r.running)+1, atomic.LoadInt32(&r.expectedCount), job)
+			// cancel ctx to release context resources
+			r.stopper[job.Name]()
 			r.running[job.Name] = job
 			r.stopper[job.Name] = func() {
 				job.Stop()
