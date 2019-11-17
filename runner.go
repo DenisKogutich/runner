@@ -2,7 +2,9 @@ package runner
 
 import (
 	"context"
+	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -15,7 +17,8 @@ type Runner struct {
 	stopper map[string]func()
 	stopC   chan struct{}
 	tasks   *TasksChannel
-
+	// expected count of running jobs (running + scheduled), used for logging
+	expectedCount int32
 	// external changes
 	add    <-chan []Job
 	delete <-chan []Job
@@ -66,10 +69,12 @@ func (r *Runner) eventLoop() {
 		case <-r.stopC:
 			return
 		case add := <-r.add:
+			atomic.AddInt32(&r.expectedCount, int32(len(add)))
 			for _, job := range add {
 				r.tasks.Put(NewAddTask(job))
 			}
 		case del := <-r.delete:
+			atomic.AddInt32(&r.expectedCount, -int32(len(del)))
 			for _, job := range del {
 				r.tasks.Put(NewDeleteTask(job))
 			}
@@ -79,12 +84,13 @@ func (r *Runner) eventLoop() {
 
 func (r *Runner) taskLoop() {
 	defer r.wg.Done()
+	tasksC := r.tasks.Chan()
 
 	for {
 		select {
 		case <-r.stopC:
 			return
-		case task := <-r.tasks.Chan():
+		case task := <-tasksC:
 			job := task.Job()
 
 			// delete
@@ -119,6 +125,7 @@ func (r *Runner) taskLoop() {
 func (r *Runner) addJob(ctx context.Context, job Job) {
 	if err := r.limiter.Acquire(ctx); err != nil {
 		// job start canceled
+		log.Printf("[INF] %q start canceled\n", job)
 		return
 	}
 
@@ -130,6 +137,7 @@ func (r *Runner) addJob(ctx context.Context, job Job) {
 			select {
 			case <-ctx.Done():
 				job.Stop()
+				log.Printf("[INF] %q stopped\n", job)
 				return
 			default:
 			}
@@ -137,15 +145,18 @@ func (r *Runner) addJob(ctx context.Context, job Job) {
 			r.guard.Lock()
 			defer r.guard.Unlock()
 
+			log.Printf("[INF] %d/%d, %q started \n", len(r.running)+1, atomic.LoadInt32(&r.expectedCount), job)
 			r.running[job.Name] = job
 			r.stopper[job.Name] = func() {
 				job.Stop()
+				log.Printf("[INF] %q stopped\n", job)
 				delete(r.running, job.Name)
 				delete(r.stopper, job.Name)
 			}
 
 			return
 		} else {
+			log.Printf("[ERR] %q start failed\n", job)
 			// schedule start job retry
 			go func() {
 				select {

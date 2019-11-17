@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
 
@@ -10,13 +11,14 @@ type Job struct {
 }
 
 func (j Job) Start(context.Context) error {
-	fmt.Printf("%v started\n", j)
+	if j.Name == "fail" {
+		return errors.New("err")
+	}
+
 	return nil
 }
 
-func (j Job) Stop() {
-	fmt.Printf("%v stopped\n", j)
-}
+func (j Job) Stop() {}
 
 func (j Job) String() string {
 	return fmt.Sprintf("job %q", j.Name)

@@ -31,14 +31,15 @@ func (tc *TasksChannel) Close() {
 }
 
 func (tc *TasksChannel) loop() {
+	in := tc.in
 	var out chan *Task
 	var nextTask *Task
 
-	for tc.in != nil || out != nil {
+	for in != nil || out != nil {
 		select {
-		case task, ok := <-tc.in:
+		case task, ok := <-in:
 			if !ok {
-				tc.in = nil
+				in = nil
 				continue
 			}
 
