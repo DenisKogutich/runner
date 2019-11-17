@@ -37,21 +37,22 @@ func (tc *TasksChannel) loop() {
 
 	for in != nil || out != nil {
 		select {
-		case task, ok := <-in:
-			if !ok {
+		case task, open := <-in:
+			if !open {
 				in = nil
-				continue
+				break
 			}
 
 			tc.tasks = append(tc.tasks, task)
 		case out <- nextTask:
 			tc.tasks = tc.tasks[1:]
+			nextTask = nil
 		}
 
-		if len(tc.tasks) > 0 {
+		if len(tc.tasks) > 0 && nextTask == nil {
 			nextTask = tc.tasks[0]
 			out = tc.out
-		} else {
+		} else if nextTask == nil {
 			out = nil
 		}
 	}
