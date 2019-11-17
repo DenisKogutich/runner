@@ -96,7 +96,7 @@ func (r *Runner) taskLoop() {
 			// delete
 			if task.Type() == Delete {
 				r.deleteJob(job)
-				return
+				continue
 			}
 
 			// add
@@ -162,6 +162,7 @@ func (r *Runner) addJob(ctx context.Context, job Job) {
 				select {
 				case <-ctx.Done():
 					// job start canceled
+					log.Printf("[INF] %q start canceled\n", job)
 					return
 				case <-time.After(r.cfg.RetryDelay):
 					r.addJob(ctx, job)
