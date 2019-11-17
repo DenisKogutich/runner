@@ -15,7 +15,7 @@ type Runner struct {
 	limiter *ConcurrentLimiter
 	running map[string]Job
 	stopper map[string]func()
-	stopC   chan struct{}
+	stop    chan struct{}
 	tasks   *TasksChannel
 	// expected count of running jobs (running + scheduled), used for logging
 	expectedCount int32
@@ -38,7 +38,7 @@ func NewRunner(cfg *Config, add <-chan []Job, delete <-chan []Job) *Runner {
 }
 
 func (r *Runner) Start() {
-	r.stopC = make(chan struct{})
+	r.stop = make(chan struct{})
 	r.tasks = NewTasksChannel()
 
 	r.wg.Add(2)
@@ -47,11 +47,11 @@ func (r *Runner) Start() {
 }
 
 func (r *Runner) Stop() {
-	close(r.stopC)
+	close(r.stop)
 	r.wg.Wait()
 
 	r.tasks.Close()
-	r.stopC = nil
+	r.stop = nil
 
 	r.guard.Lock()
 	defer r.guard.Unlock()
@@ -61,12 +61,20 @@ func (r *Runner) Stop() {
 	}
 }
 
+func (r *Runner) Job(name string) (Job, bool) {
+	r.guard.RLock()
+	defer r.guard.RUnlock()
+
+	j, exist := r.running[name]
+	return j, exist
+}
+
 func (r *Runner) eventLoop() {
 	defer r.wg.Done()
 
 	for {
 		select {
-		case <-r.stopC:
+		case <-r.stop:
 			return
 		case add := <-r.add:
 			atomic.AddInt32(&r.expectedCount, int32(len(add)))
@@ -84,13 +92,13 @@ func (r *Runner) eventLoop() {
 
 func (r *Runner) taskLoop() {
 	defer r.wg.Done()
-	tasksC := r.tasks.Chan()
+	tasksChan := r.tasks.Chan()
 
 	for {
 		select {
-		case <-r.stopC:
+		case <-r.stop:
 			return
-		case task := <-tasksC:
+		case task := <-tasksChan:
 			job := task.Job()
 
 			// delete
