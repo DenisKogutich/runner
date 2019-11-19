@@ -2,6 +2,7 @@ package runner
 
 import "context"
 
+// ConcurrentLimiter limits parallel actions.
 type ConcurrentLimiter struct {
 	quota chan struct{}
 }

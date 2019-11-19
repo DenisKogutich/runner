@@ -1,10 +1,32 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"runner"
 	"time"
 )
+
+// exampleJob implements exampleJob.
+type exampleJob struct {
+	name string
+	id   int64
+}
+
+func (j exampleJob) Start(context.Context) error {
+	if j.name == "fail" {
+		return errors.New("err")
+	}
+
+	return nil
+}
+
+func (j exampleJob) ID() int64 { return j.id }
+
+func (j exampleJob) Stop() {}
+
+func (j exampleJob) String() string { return fmt.Sprintf("job %q", j.name) }
 
 func main() {
 	cfg := &runner.Config{
@@ -16,23 +38,29 @@ func main() {
 
 	go func() {
 		for {
-			j, ok := r.Job("1")
+			j, ok := r.Job(1)
 			fmt.Println(j, ok)
-			time.Sleep(50 * time.Millisecond)
+			time.Sleep(250 * time.Millisecond)
 		}
 	}()
 
 	r.Start()
-	add <- []runner.Job{{Name: "1"}, {Name: "2"}, {Name: "fail"}, {Name: "4"}, {Name: "5"}}
+	add <- []runner.Job{
+		exampleJob{name: "1", id: 1},
+		exampleJob{name: "2", id: 2},
+		exampleJob{name: "fail", id: 3},
+		exampleJob{name: "4", id: 4},
+		exampleJob{name: "5", id: 5},
+	}
 
 	time.AfterFunc(3*time.Second, func() {
-		del <- []runner.Job{{Name: "2"}, {Name: "fail"}}
+		del <- []runner.Job{exampleJob{name: "2", id: 2}, exampleJob{name: "fail", id: 3}}
 
 		time.AfterFunc(5*time.Second, func() {
-			add <- []runner.Job{{Name: "6"}}
+			add <- []runner.Job{exampleJob{name: "6", id: 6}}
 
 			time.AfterFunc(2*time.Second, func() {
-				del <- []runner.Job{{Name: "1"}}
+				del <- []runner.Job{exampleJob{name: "1", id: 1}}
 			})
 		})
 	})
